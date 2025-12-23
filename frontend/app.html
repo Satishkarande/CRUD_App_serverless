@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>FlowTasks</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<style>
+body {
+  margin: 0;
+  font-family: system-ui;
+  background: #0b1020;
+  color: #e5e7eb;
+}
+.app { display: grid; grid-template-columns: 240px 1fr; height: 100vh; }
+
+.sidebar {
+  background: #020617;
+  border-right: 1px solid #1e293b;
+  padding: 20px;
+}
+.brand { font-size: 22px; font-weight: 800; margin-bottom: 30px; }
+
+.nav button {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  border: none;
+  background: #020617;
+  color: #e5e7eb;
+  cursor: pointer;
+  text-align: left;
+}
+.nav button:hover { background: #1e293b; }
+
+.main { padding: 24px; overflow-y: auto; }
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.subtitle { color: #94a3b8; font-size: 14px; }
+
+.user-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.user-pill {
+  border: 1px solid #1e293b;
+  padding: 6px 12px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.badge { padding: 4px 10px; border-radius: 999px; font-size: 12px; }
+.admin { background:#7c3aed; }
+.user { background:#334155; }
+
+.logout-btn {
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+}
+.logout-btn:hover { text-decoration: underline; }
+
+.card {
+  background: #020617;
+  border: 1px solid #1e293b;
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 12px; border-bottom: 1px solid #1e293b; }
+th { color: #94a3b8; font-size: 13px; text-align: left; }
+
+.btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-blue { background:#2563eb; color:white; }
+.btn-green { background:#16a34a; color:#020617; }
+.btn-red { background:#991b1b; color:white; }
+
+input,
+select,
+textarea {
+  background-color: #020617 !important;
+  border: 1px solid #1e293b !important;
+  color: #e5e7eb !important;
+  padding: 10px;
+  border-radius: 8px;
+  width: 100%;
+  font-size: 14px;
+  outline: none;
+}
+
+/* Placeholder color */
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8;
+}
+
+/* Focus state */
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+
+.hidden { display:none; }
+
+/* ===== BADGES ===== */
+.status-badge, .priority-badge, .category-badge {
+  padding:4px 10px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:600;
+  display:inline-block;
+  text-transform:capitalize;
+}
+
+.status-todo { background:#334155; }
+.status-in-progress { background:#ca8a04; color:#020617; }
+.status-done { background:#16a34a; color:#020617; }
+
+.priority-low { background:#15803d; color:#020617; }
+.priority-medium { background:#d97706; color:#020617; }
+.priority-high { background:#b91c1c; }
+
+.category-work { background:#2563eb; }
+.category-personal { background:#334155; }
+.category-bug { background:#7c3aed; }
+.category-feature { background:#16a34a; color:#020617; }
+.category-ops { background:#ca8a04; color:#020617; }
+.category-general { background:#475569; }
+
+/* Comment animation */
+.comment-row {
+  overflow:hidden;
+  max-height:0;
+  opacity:0;
+  transition:max-height .25s ease, opacity .2s ease;
+}
+.comment-row.open {
+  max-height:800px;
+  opacity:1;
+}
+/* =========================
+   @MENTION DROPDOWN
+========================= */
+.mention-box {
+  position: absolute;
+  background: #020617;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  margin-top: 6px;
+  z-index: 1000;
+  width: 260px;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 10px 30px rgba(0,0,0,.4);
+}
+
+.mention-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #e5e7eb;
+}
+
+.mention-item:hover {
+  background: #1e293b;
+  color: #60a5fa;
+}
+
+/* scrollbar */
+.mention-box::-webkit-scrollbar {
+  width: 6px;
+}
+.mention-box::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 6px;
+  /* =========================
+   THEME VARIABLES
+========================= */
+:root {
+  --bg-main: #0b1020;
+  --bg-card: #020617;
+  --bg-border: #1e293b;
+  --text-main: #e5e7eb;
+  --text-muted: #94a3b8;
+  --accent: #2563eb;
+}
+
+[data-theme="light"] {
+  --bg-main: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-border: #e2e8f0;
+  --text-main: #020617;
+  --text-muted: #475569;
+  --accent: #2563eb;
+}
+
+/* Apply variables */
+body {
+  background: var(--bg-main);
+  color: var(--text-main);
+}
+
+.card, .sidebar {
+  background: var(--bg-card);
+  border-color: var(--bg-border);
+}
+
+.subtitle, th {
+  color: var(--text-muted);
+}
+
+/* =========================
+   HEADER POLISH
+========================= */
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--bg-border);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.role-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+}
+
+.logout-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+.logout-btn:hover {
+  text-decoration: underline;
+}
+
+/* =========================
+   THEME TOGGLE
+========================= */
+.theme-toggle {
+  cursor: pointer;
+  font-size: 14px;
+  border: 1px solid var(--bg-border);
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--bg-card);
+}
+}
+</style>
+</head>
+
+<body>
+<div class="app">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="brand">FlowTasks</div>
+    <div class="nav">
+      <button onclick="showView('tasks')">Tasks</button>
+      <button onclick="showView('mentions')">
+        Mentions <span id="mentionsBadge"
+        style="display:none;background:#2563eb;color:white;
+        padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;"></span>
+      </button>
+      <button id="auditNav" onclick="showView('audit')" style="display:none;">Audit</button>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- HEADER -->
+    <div class="header">
+      <div>
+        <h2 id="greetingText"></h2>
+        <div class="subtitle">Focus. Execute. Deliver.</div>
+      </div>
+      <div class="user-box">
+        <div class="user-pill">
+          <span id="username"></span>
+          <span id="roleBadge" class="badge"></span>
+        </div>
+        <button class="logout-btn" onclick="logout()">Logout</button>
+      </div>
+    </div>
+    
+
+    <!-- TASKS -->
+    <div id="tasksView">
+      <div class="section-title">Tasks Overview</div>
+
+      <!-- CREATE TASK -->
+      <div class="card">
+        <h3>Create Task</h3>
+        <input id="title" placeholder="Title"><br><br>
+       <textarea
+  id="description"
+  rows="3"
+  placeholder="Description (@username supported)">
+</textarea>
+<div id="task-mention-box" style="position:relative;"></div>
+<br>
+        <select id="category">
+          <option value="general">General</option>
+          <option value="work">Work</option>
+          <option value="personal">Personal</option>
+          <option value="bug">Bug</option>
+          <option value="feature">Feature</option>
+          <option value="ops">Ops</option>
+        </select><br><br>
+
+        <select id="status">
+          <option value="todo">To Do</option>
+          <option value="in-progress">In Progress</option>
+          <option value="done">Done</option>
+        </select><br><br>
+
+        <select id="priority">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select><br><br>
+
+        <button class="btn btn-green" onclick="addTask()">Add Task</button>
+      </div>
+
+      <!-- FILTER -->
+      <div class="card">
+        <h3>Filter Tasks</h3>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <select id="filterCategory">
+            <option value="">All Category</option>
+            <option value="general">General</option>
+            <option value="work">Work</option>
+            <option value="personal">Personal</option>
+            <option value="bug">Bug</option>
+            <option value="feature">Feature</option>
+            <option value="ops">Ops</option>
+          </select>
+
+          <select id="filterStatus">
+            <option value="">All Status</option>
+            <option value="todo">To Do</option>
+            <option value="in-progress">In Progress</option>
+            <option value="done">Done</option>
+          </select>
+
+          <select id="filterPriority">
+            <option value="">All Priority</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+
+          <button class="btn btn-blue" onclick="applyFilters()">Apply</button>
+          <button class="btn btn-red" onclick="clearFilters()">Clear</button>
+        </div>
+      </div>
+
+      <!-- TASK LIST -->
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Title</th>
+              <th>Created By</th>
+              <th>Status</th>
+              <th>Priority</th>
+              <th>Updated</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="taskBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- MENTIONS -->
+    <div id="mentionsView" class="hidden">
+      <div class="card">
+        <h3>Mentions</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>From</th><th>Task</th><th>Comment</th><th>Date</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="mentionsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- AUDIT -->
+    <div id="auditView" class="hidden">
+      <div class="card">
+        <h3>Audit Log</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>Action</th><th>Task</th><th>User</th><th>Date</th>
+            </tr>
+          </thead>
+          <tbody id="auditBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

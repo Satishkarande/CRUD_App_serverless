@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Auth Callback</title>
+</head>
+<body>
+  <script>
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+
+    const idToken = params.get("id_token");
+    const accessToken = params.get("access_token");
+
+    if (!idToken || !accessToken) {
+      console.error("Tokens missing in callback");
+      window.location.href = "login.html";
+    }
+    localStorage.setItem("id_token", idToken);
+    localStorage.setItem("access_token", accessToken);
+
+    // 🔒 IMPORTANT: redirect ONLY after storing tokens
+    window.location.href = "app.html";
+  </script>
+</body>
+</html>
