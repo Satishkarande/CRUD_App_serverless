@@ -209,7 +209,9 @@ function renderTasks(tasks) {
   <td>${i + 1}</td>
 
   <td>
-  <div style="font-weight:600;">${t.title}</div>
+  <div style="font-weight:600;">
+  ${sanitizeInput(t.title)}
+</div>
 
   <div style="margin-top:6px;">
     ${categoryBadge(t.category)}
@@ -298,6 +300,20 @@ async function updateTask(id, pk, body) {
 }
 
 async function addTask() {
+  const rawTitle = title.value.trim();
+
+  // ❌ Empty
+  if (!rawTitle) {
+    alert("Title cannot be empty");
+    return;
+  }
+
+  // ❌ HTML / script attempt
+  if (/[<>]/.test(rawTitle)) {
+    alert("Title cannot contain HTML or special characters");
+    return;
+  }
+
   await fetch(`${API}/tasks`, {
     method: "POST",
     headers: {
@@ -305,7 +321,7 @@ async function addTask() {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      title: title.value,
+      title: rawTitle,
       description: description.value,
       category: category.value,
       status: status.value,
@@ -708,6 +724,14 @@ function toggleTheme() {
 /* Init theme */
 const savedTheme = localStorage.getItem("theme") || "dark";
 applyTheme(savedTheme);
+
+function sanitizeInput(text) {
+  return text
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
 /* =========================================================
    LOGOUT
