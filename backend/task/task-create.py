@@ -1,185 +1,309 @@
+
 import json
 import os
-import boto3
-import uuid
 import re
-from datetime import datetime
+import uuid
+import hashlib
+import logging
+from datetime import datetime, timezone
+
+import boto3
+from boto3.dynamodb.types import TypeSerializer
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource("dynamodb")
-cognito = boto3.client("cognito-idp")
+client = dynamodb.meta.client
+serializer = TypeSerializer()
 
-TASK_TABLE = dynamodb.Table(os.environ["TASK_TABLE"])
-AUDIT_TABLE = dynamodb.Table(os.environ["AUDIT_TABLE"])
-MENTIONS_TABLE = dynamodb.Table(os.environ["MENTIONS_TABLE"])
-
+TASK_TABLE = os.environ["TASK_TABLE"]
+MEMBERSHIP_TABLE = os.environ["TASK_MEMBERSHIP_TABLE"]
+AUDIT_TABLE = os.environ["AUDIT_TABLE"]
+MENTIONS_TABLE = os.environ["MENTIONS_TABLE"]
 USER_POOL_ID = os.environ["USER_POOL_ID"]
 
-MENTION_REGEX = r'@([a-zA-Z0-9_.-]+)'
+cognito = boto3.client("cognito-idp")
+
+MAX_MENTIONS = 20
+MENTION_REGEX = r"@([a-zA-Z0-9_.-]+)"
 
 CORS_HEADERS = {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": os.environ.get("ALLOWED_ORIGIN", "*"),
     "Access-Control-Allow-Headers": "Authorization,Content-Type",
     "Access-Control-Allow-Methods": "OPTIONS,POST"
 }
 
-# -------------------------
-# Helper: username → sub
-# -------------------------
-def get_user_sub(username):
-    resp = cognito.list_users(
+
+def response(status, body):
+    return {
+        "statusCode": status,
+        "headers": CORS_HEADERS,
+        "body": json.dumps(body)
+    }
+
+
+def serialize_item(item):
+    return {
+        key: serializer.serialize(value)
+        for key, value in item.items()
+    }
+
+
+def get_user(username):
+    result = cognito.list_users(
         UserPoolId=USER_POOL_ID,
-        Filter=f'username = "{username}"'
+        Filter=f'username = "{username}"',
+        Limit=1
     )
-    users = resp.get("Users", [])
+
+    users = result.get("Users", [])
+
     if not users:
         return None
 
-    for attr in users[0]["Attributes"]:
-        if attr["Name"] == "sub":
-            return attr["Value"]
-    return None
+    user = users[0]
+    attributes = {
+        attr["Name"]: attr["Value"]
+        for attr in user.get("Attributes", [])
+    }
+
+    return {
+        "userId": attributes.get("sub"),
+        "userName": user.get("Username", username)
+    }
+
+
+def admin_shard(task_id):
+    digest = hashlib.sha256(task_id.encode()).hexdigest()
+    return int(digest[:8], 16) % 4
 
 
 def handler(event, context):
     try:
-        if event.get("httpMethod") == "OPTIONS":
-            return {"statusCode": 200, "headers": CORS_HEADERS, "body": ""}
+        claims = (
+            event.get("requestContext", {})
+            .get("authorizer", {})
+            .get("jwt", {})
+            .get("claims", {})
+        )
 
-        body = json.loads(event.get("body") or "{}")
-
-        # =====================
-        # AUTH
-        # =====================
-        claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
-        user_sub = claims["sub"]
+        user_id = claims.get("sub")
         username = (
             claims.get("cognito:username")
             or claims.get("username")
             or claims.get("email")
-            or "unknown"
         )
 
-        # =====================
-        # INPUT
-        # =====================
-        title = body.get("title", "").strip()
-        if not title:
-            return {
-                "statusCode": 400,
-                "headers": CORS_HEADERS,
-                "body": json.dumps({"message": "Title required"})
-            }
+        if not user_id or not username:
+            return response(401, {"message": "Unauthorized"})
+
+        body = json.loads(event.get("body") or "{}")
+
+        title = body.get("title", "")
+        if not isinstance(title, str):
+            return response(400, {"message": "Invalid title"})
+
+        title = title.strip()
+
+        if not title or len(title) > 150:
+            return response(400, {
+                "message": "Title must contain 1 to 150 characters"
+            })
 
         description = body.get("description", "")
+        if not isinstance(description, str) or len(description) > 5000:
+            return response(400, {"message": "Invalid description"})
+
         category = body.get("category", "general")
-        status = body.get("status", "todo").strip().lower()
+        status = body.get("status", "todo")
         priority = body.get("priority", "medium")
 
-        # =====================
-        # EXTRACT MENTIONS
-        # =====================
-        mentioned_usernames = list(set(
-            u for u in re.findall(MENTION_REGEX, description)
-            if u != username
+        if category not in ["general", "work", "personal", "bug", "feature", "ops"]:
+            return response(400, {"message": "Invalid category"})
+
+        if status not in ["todo", "in-progress", "done"]:
+            return response(400, {"message": "Invalid status"})
+
+        if priority not in ["low", "medium", "high"]:
+            return response(400, {"message": "Invalid priority"})
+
+        mentioned_usernames = sorted(set(
+            re.findall(MENTION_REGEX, description)
         ))
 
-        # =====================
-        # BASE PARTICIPANTS
-        # =====================
+        mentioned_usernames = [
+            name for name in mentioned_usernames
+            if name.lower() != username.lower()
+        ]
+
+        if len(mentioned_usernames) > MAX_MENTIONS:
+            return response(400, {
+                "message": f"Maximum {MAX_MENTIONS} mentions allowed"
+            })
+
         participants = [{
-            "userId": user_sub,
+            "userId": user_id,
             "userName": username
         }]
-        participant_ids = [user_sub]
 
-        # =====================
-        # ADD MENTIONED USERS
-        # =====================
-        for u in mentioned_usernames:
-            sub = get_user_sub(u)
-            if not sub or sub in participant_ids:
+        for mentioned_username in mentioned_usernames:
+            user = get_user(mentioned_username)
+
+            if not user or not user["userId"]:
                 continue
 
-            participants.append({
-                "userId": sub,
-                "userName": u
-            })
-            participant_ids.append(sub)
+            if user["userId"] not in [
+                participant["userId"] for participant in participants
+            ]:
+                participants.append(user)
 
-        # =====================
-        # CREATE TASK
-        # =====================
         task_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
-        TASK_TABLE.put_item(
-            Item={
-                "pk": f"TASK#{task_id}",
-                "sk": "META",
+        task_pk = f"TASK#{task_id}"
+        shard = admin_shard(task_id)
+
+        task = {
+            "pk": task_pk,
+            "sk": "META",
+            "taskId": task_id,
+            "id": task_id,
+            "title": title,
+            "description": description,
+            "category": category,
+            "status": status,
+            "priority": priority,
+            "ownerId": user_id,
+            "ownerName": username,
+            "participants": participants,
+            "participantIds": [
+                participant["userId"] for participant in participants
+            ],
+            "commentCount": 0,
+            "isDeleted": False,
+            "createdBy": username,
+            "createdAt": now,
+            "updatedBy": username,
+            "updatedAt": now
+        }
+
+        audit = {
+            "pk": f"AUDIT#{now[:7]}",
+            "sk": f"{now}#CREATE#{task_id}",
+            "action": "CREATE",
+            "taskId": task_id,
+            "taskTitle": title,
+            "actorId": user_id,
+            "actorName": username,
+            "createdAt": now
+        }
+
+        transaction = [
+            {
+                "Put": {
+                    "TableName": TASK_TABLE,
+                    "Item": serialize_item(task),
+                    "ConditionExpression": "attribute_not_exists(pk)"
+                }
+            },
+            {
+                "Put": {
+                    "TableName": MEMBERSHIP_TABLE,
+                    "Item": serialize_item({
+                        "pk": task_pk,
+                        "sk": "ADMIN",
+                        "gsi2pk": f"ADMIN#{shard}",
+                        "gsi2sk": f"UPDATED#{now}#TASK#{task_id}",
+                        "taskId": task_id,
+                        "updatedAt": now
+                    })
+                }
+            },
+            {
+                "Put": {
+                    "TableName": AUDIT_TABLE,
+                    "Item": serialize_item(audit)
+                }
+            }
+        ]
+
+        for participant in participants:
+            participant_id = participant["userId"]
+
+            membership = {
+                "pk": task_pk,
+                "sk": f"USER#{participant_id}",
+                "gsi1pk": f"USER#{participant_id}",
+                "gsi1sk": f"UPDATED#{now}#TASK#{task_id}",
                 "taskId": task_id,
-                "id": task_id,
-                "title": title,
-                "description": description,
-                "category": category,
+                "userId": participant_id,
+                "role": (
+                    "OWNER" if participant_id == user_id
+                    else "PARTICIPANT"
+                ),
+                "taskTitle": title,
                 "status": status,
                 "priority": priority,
-                "ownerId": user_sub,
-                "ownerName": username,
-                "participants": participants,
-                "participantIds": participant_ids,
-                "createdBy": username,
-                "createdAt": now,
-                "updatedBy": username,
                 "updatedAt": now
             }
-        )
 
-        # =====================
-        # AUDIT
-        # =====================
-        AUDIT_TABLE.put_item(
-            Item={
-                "pk": "AUDIT",
-                "sk": f"CREATE#{task_id}#{now}",
-                "action": "CREATE",
-                "taskId": task_id,
-                "taskTitle": title,
-                "createdBy": username,
-                "createdAt": now
-            }
-        )
+            transaction.append({
+                "Put": {
+                    "TableName": MEMBERSHIP_TABLE,
+                    "Item": serialize_item(membership)
+                }
+            })
 
-        # =====================
-        # MENTIONS
-        # =====================
-        for u in mentioned_usernames:
-            MENTIONS_TABLE.put_item(
-                Item={
-                    "pk": f"USER#{u}",
+            if participant_id != user_id:
+                mention = {
+                    "pk": f"USER#{participant_id}",
                     "sk": f"MENTION#{now}#{task_id}",
+                    "gsi1pk": f"USER#{participant_id}#UNREAD",
+                    "gsi1sk": f"{now}#{task_id}",
                     "taskId": task_id,
                     "taskTitle": title,
                     "comment": "You were mentioned in task description",
                     "mentionedBy": username,
+                    "mentionedById": user_id,
                     "status": "UNREAD",
                     "createdAt": now
                 }
-            )
 
-        return {
-            "statusCode": 201,
-            "headers": CORS_HEADERS,
-            "body": json.dumps({
-                "message": "Task created",
-                "taskId": task_id
+                transaction.append({
+                    "Put": {
+                        "TableName": MENTIONS_TABLE,
+                        "Item": serialize_item(mention)
+                    }
+                })
+
+        if len(transaction) > 100:
+            return response(400, {
+                "message": "Too many participants for one transaction"
             })
-        }
 
-    except Exception as e:
-        print("CREATE TASK ERROR:", str(e))
-        return {
-            "statusCode": 500,
-            "headers": CORS_HEADERS,
-            "body": json.dumps({"message": "Failed to create task"})
-        }
+        client.transact_write_items(
+            TransactItems=transaction,
+            ClientRequestToken=task_id
+        )
+
+        logger.info(
+            "Task created",
+            extra={
+                "task_id": task_id,
+                "actor_id": user_id,
+                "participant_count": len(participants)
+            }
+        )
+
+        return response(201, {
+            "message": "Task created",
+            "taskId": task_id
+        })
+
+    except Exception:
+        logger.exception("CREATE_TASK_FAILED")
+        return response(500, {
+            "message": "Failed to create task"
+        })

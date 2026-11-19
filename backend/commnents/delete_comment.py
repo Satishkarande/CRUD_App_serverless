@@ -1,79 +1,86 @@
+
 import json
 import os
+import logging
+
 import boto3
-from datetime import datetime
 
-dynamodb = boto3.resource("dynamodb")
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-COMMENTS = dynamodb.Table(os.environ["COMMENTS_TABLE"])
-AUDIT = dynamodb.Table(os.environ["AUDIT_TABLE"])
-TASKS = dynamodb.Table(os.environ["TASKS_TABLE"])
+cognito = boto3.client("cognito-idp")
+
+USER_POOL_ID = os.environ["USER_POOL_ID"]
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
+
+CORS_HEADERS = {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+    "Access-Control-Allow-Headers": "Authorization,Content-Type",
+    "Access-Control-Allow-Methods": "OPTIONS,GET"
+}
+
+
+def response(status_code, body):
+    return {
+        "statusCode": status_code,
+        "headers": CORS_HEADERS,
+        "body": json.dumps(body)
+    }
+
 
 def handler(event, context):
-    task_id = event["pathParameters"]["taskId"]
-    comment_id = event["pathParameters"]["commentId"]
+    try:
+        claims = (
+            event.get("requestContext", {})
+            .get("authorizer", {})
+            .get("jwt", {})
+            .get("claims", {})
+        )
 
-    claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
-    user_id = claims["sub"]
-    username = claims.get("username") or claims.get("email")
-    groups = claims.get("cognito:groups", [])
+        # Only authenticated users can retrieve the user directory.
+        if not claims.get("sub"):
+            return response(401, {"message": "Unauthorized"})
 
-    is_admin = "admin" in groups
+        users = []
+        pagination_token = None
 
-    pk = f"TASK#{task_id}"
-    sk = f"COMMENT#{comment_id}"
+        while True:
+            params = {
+                "UserPoolId": USER_POOL_ID,
+                "Limit": 60
+            }
 
-    # 1️⃣ Get comment
-    res = COMMENTS.get_item(Key={"pk": pk, "sk": sk})
-    if "Item" not in res:
-        return {"statusCode": 404, "body": "Comment not found"}
+            if pagination_token:
+                params["PaginationToken"] = pagination_token
 
-    comment = res["Item"]
+            result = cognito.list_users(**params)
 
-    if not is_admin and comment["userId"] != user_id:
-        return {"statusCode": 403, "body": "Forbidden"}
+            for user in result.get("Users", []):
+                username = user.get("Username")
+                attributes = {
+                    attr["Name"]: attr["Value"]
+                    for attr in user.get("Attributes", [])
+                }
 
-    # 2️⃣ Get task meta (title)
-    task = TASKS.get_item(
-        Key={"pk": pk, "sk": "META"}
-    ).get("Item", {})
+                user_sub = attributes.get("sub")
 
-    task_title = task.get("title", "Unknown Task")
+                if username and user_sub:
+                    users.append({
+                        "username": username,
+                        "sub": user_sub
+                    })
 
-    # 3️⃣ Delete comment
-    COMMENTS.delete_item(Key={"pk": pk, "sk": sk})
+            pagination_token = result.get("PaginationToken")
 
-    # 4️⃣ Decrement comment count safely
-    TASKS.update_item(
-        Key={
-            "pk": pk,
-            "sk": "META"
-        },
-        UpdateExpression="SET commentCount = if_not_exists(commentCount, :zero) - :one",
-        ExpressionAttributeValues={
-            ":one": 1,
-            ":zero": 0
-        }
-    )
+            if not pagination_token:
+                break
 
-    # 5️⃣ Audit
-    ts = datetime.utcnow().isoformat()
+        return response(200, users)
 
-    AUDIT.put_item(
-        Item={
-            "pk": "AUDIT",
-            "sk": f"DELETE_COMMENT#{comment_id}#{ts}",
-            "action": "DELETE_COMMENT",
-            "taskId": task_id,
-            "taskTitle": task_title,
-            "commentId": comment_id,
-            "deletedComment": comment["comment"],
-            "deletedBy": username,
-            "createdAt": ts
-        }
-    )
-
-    return {
-        "statusCode": 200,
-        "body": json.dumps({"message": "Comment deleted"})
-    }
+    except Exception:
+        logger.exception("Failed to fetch Cognito users")
+        return response(
+            500,
+            {"message": "Failed to fetch users"}
+        )

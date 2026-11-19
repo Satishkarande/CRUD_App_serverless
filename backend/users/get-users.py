@@ -1,36 +1,50 @@
 
 import json
 import os
+import logging
+
 import boto3
 
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
 cognito = boto3.client("cognito-idp")
+
 USER_POOL_ID = os.environ["USER_POOL_ID"]
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 
 CORS_HEADERS = {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Headers": "Authorization,Content-Type",
     "Access-Control-Allow-Methods": "OPTIONS,GET"
 }
 
+
+def response(status_code, body):
+    return {
+        "statusCode": status_code,
+        "headers": CORS_HEADERS,
+        "body": json.dumps(body)
+    }
+
+
 def handler(event, context):
     try:
-        # =====================
-        # CORS PREFLIGHT
-        # =====================
-        if event.get("httpMethod") == "OPTIONS":
-            return {
-                "statusCode": 200,
-                "headers": CORS_HEADERS,
-                "body": ""
-            }
+        claims = (
+            event.get("requestContext", {})
+            .get("authorizer", {})
+            .get("jwt", {})
+            .get("claims", {})
+        )
+
+        # Only authenticated users can retrieve the user directory.
+        if not claims.get("sub"):
+            return response(401, {"message": "Unauthorized"})
 
         users = []
         pagination_token = None
 
-        # =====================
-        # LIST USERS (PAGINATED)
-        # =====================
         while True:
             params = {
                 "UserPoolId": USER_POOL_ID,
@@ -40,39 +54,33 @@ def handler(event, context):
             if pagination_token:
                 params["PaginationToken"] = pagination_token
 
-            response = cognito.list_users(**params)
+            result = cognito.list_users(**params)
 
-            for user in response.get("Users", []):
+            for user in result.get("Users", []):
                 username = user.get("Username")
-                sub = None
+                attributes = {
+                    attr["Name"]: attr["Value"]
+                    for attr in user.get("Attributes", [])
+                }
 
-                for attr in user.get("Attributes", []):
-                    if attr["Name"] == "sub":
-                        sub = attr["Value"]
-                        break
+                user_sub = attributes.get("sub")
 
-                if username and sub:
+                if username and user_sub:
                     users.append({
                         "username": username,
-                        "sub": sub
+                        "sub": user_sub
                     })
 
-            pagination_token = response.get("PaginationToken")
+            pagination_token = result.get("PaginationToken")
+
             if not pagination_token:
                 break
 
-        return {
-            "statusCode": 200,
-            "headers": CORS_HEADERS,
-            "body": json.dumps(users)
-        }
+        return response(200, users)
 
-    except Exception as e:
-        print("GET USERS ERROR:", str(e))
-        return {
-            "statusCode": 500,
-            "headers": CORS_HEADERS,
-            "body": json.dumps({
-                "message": "Failed to fetch users"
-            })
-        }
+    except Exception:
+        logger.exception("Failed to fetch Cognito users")
+        return response(
+            500,
+            {"message": "Failed to fetch users"}
+        )
