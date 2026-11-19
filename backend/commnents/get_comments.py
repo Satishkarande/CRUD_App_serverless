@@ -50,7 +50,12 @@ def parse_groups(value):
 def handler(event, context):
     try:
         path_parameters = event.get("pathParameters") or {}
-        task_id = path_parameters.get("id")
+
+        # Support both route parameter names.
+        task_id = (
+            path_parameters.get("taskId")
+            or path_parameters.get("id")
+        )
 
         if not task_id:
             return response(400, {"message": "Task ID is required"})
@@ -70,7 +75,6 @@ def handler(event, context):
         groups = parse_groups(claims.get("cognito:groups", []))
         is_admin = "admin" in groups
 
-        # Retrieve the task to verify access.
         task_result = task_table.get_item(
             Key={
                 "pk": f"TASK#{task_id}",
@@ -94,7 +98,6 @@ def handler(event, context):
                 {"message": "You are not allowed to view these comments"}
             )
 
-        # Retrieve all comment pages in ascending order.
         query_kwargs = {
             "KeyConditionExpression": Key("pk").eq(f"TASK#{task_id}"),
             "ScanIndexForward": True
