@@ -4,3 +4,10 @@ __pycache__/
 
 # Lambda deployment packages
 lambda-packages/
+audit-values
+create-api-routes
+deploy-lambda
+gsi1-values
+gsi2-values
+membership-values
+task-key

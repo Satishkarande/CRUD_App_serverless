@@ -1,25 +1,18 @@
+
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Auth Callback</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlowTasks - Authentication</title>
 </head>
 <body>
+  <h2>Signing you in...</h2>
+  <p>Please wait while we complete authentication.</p>
+
+  <script src="auth.js"></script>
   <script>
-    const hash = window.location.hash.substring(1);
-    const params = new URLSearchParams(hash);
-
-    const idToken = params.get("id_token");
-    const accessToken = params.get("access_token");
-
-    if (!idToken || !accessToken) {
-      console.error("Tokens missing in callback");
-      window.location.href = "login.html";
-    }
-    localStorage.setItem("id_token", idToken);
-    localStorage.setItem("access_token", accessToken);
-
-    // 🔒 IMPORTANT: redirect ONLY after storing tokens
-    window.location.href = "app.html";
+    handleCallback();
   </script>
 </body>
 </html>

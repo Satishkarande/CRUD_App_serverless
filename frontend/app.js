@@ -1,745 +1,203 @@
-async function safeFetch(url, options = {}) {
-  const res = await fetch(url, options);
-  if (res.status === 401) {
-    alert("Session expired. Please login again.");
-    logout();
-    return null;
-  }
-  return res;
-}
-function formatLocalTime(utcString) {
-  if (!utcString) return "-";
+/* FlowTasks frontend — API contracts match the uploaded Lambda route definitions. */
+const API_BASE = "https://rq067no9cb.execute-api.ap-south-1.amazonaws.com";
+const accessToken = localStorage.getItem("access_token");
+const idToken = localStorage.getItem("id_token");
+if (!accessToken) location.replace("login.html");
 
-  // 🔥 FORCE UTC interpretation
-  const utcDate = new Date(
-    utcString.endsWith("Z") ? utcString : utcString + "Z"
-  );
-
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-  }).format(utcDate);
-}/* =========================================================
-   USER CACHE (MENTIONS SOURCE)
-========================================================= */
-let ALL_USERS = []; // [{ username, userId }]
-/* =========================================================
-   GLOBAL SETUP
-========================================================= */
-let ALL_TASKS = []; // 🔑 source of truth for filtering
-
-const API = "https://s8a2413duf.execute-api.ap-south-1.amazonaws.com/prod";
-const token = localStorage.getItem("access_token");
-if (!token) location.href = "login.html";
-
-/* Decode JWT (access token) */
-const claims = JSON.parse(atob(token.split(".")[1]));
-const username = claims.username || claims.email;
-const isAdmin = claims["cognito:groups"]?.includes("admin");
-
-/* Header UI */
-document.getElementById("username").innerText = username;
-document.getElementById("roleBadge").innerText = isAdmin ? "ADMIN" : "USER";
-document.getElementById("roleBadge").classList.add(isAdmin ? "admin" : "user");
-if (isAdmin) document.getElementById("auditNav").style.display = "block";
-
-function getGreeting(username) {
-  const now = new Date();
-  const hour = now.getHours();
-
-  let greeting;
-  let emoji = "";
-
-  if (hour >= 5 && hour < 12) {
-    greeting = "Good Morning";
-    emoji = "☀️";
-  } else if (hour >= 12 && hour < 17) {
-    greeting = "Good Afternoon";
-    emoji = "🌤️";
-  } else if (hour >= 17 && hour < 21) {
-    greeting = "Good Evening";
-    emoji = "🌆";
-  } else {
-    greeting = "Working late";
-    emoji = "🌙";
-  }
-
-  return `${greeting}, ${username} ${emoji}`;
-}
-document.getElementById("greetingText").innerText =
-  getGreeting(username);
-/* =========================================================
-   MENTION HIGHLIGHTER (SAFE)
-========================================================= */
-function highlightMentions(text = "") {
-  return text.replace(
-    /@([a-zA-Z0-9_.-]+)/g,
-    `<span style="
-      color:#60a5fa;
-      font-weight:600;
-      cursor:pointer;
-    ">@$1</span>`
-  );
-}
-/* =========================================================
-   VIEW SWITCHER
-========================================================= */
-function showView(v) {
-  ["tasks", "mentions", "audit"].forEach(x =>
-    document.getElementById(x + "View").classList.add("hidden")
-  );
-  document.getElementById(v + "View").classList.remove("hidden");
-
-  if (v === "tasks") loadTasks();
-  if (v === "mentions") loadMentions();
-  if (v === "audit") loadAudit();
-}
-
-/* =========================================================
-   BADGES
-========================================================= */
-function statusBadge(status) {
-  return `<span class="status-badge status-${status}">${status}</span>`;
-}
-
-function priorityBadge(priority) {
-  return `<span class="priority-badge priority-${priority}">${priority}</span>`;
-}
-
-function categoryBadge(category) {
-  const c = category || "general";
-  return `<span class="category-badge category-${c}">${c}</span>`;
-}
-function isMyTask(task) {
-  return Array.isArray(task.participantIds) &&
-         task.participantIds.includes(claims.sub);
-}
-/* =========================================================
-   LOAD USERS (FOR @MENTIONS)
-========================================================= */
-async function loadUsers() {
+function decodeJwt(token) {
   try {
-    const res = await fetch(`${API}/users`, {
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-
-    if (!res.ok) throw new Error("Failed to load users");
-
-    const users = await res.json();
-
-    // Normalize (safe)
-    ALL_USERS = users
-      .filter(u => u.username) // safety
-      .map(u => ({
-        username: u.username,
-        userId: u.sub
-      }));
-
-    console.log("Users loaded for mentions:", ALL_USERS.length);
-  } catch (err) {
-    console.error("User load failed:", err);
-  }
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(decodeURIComponent(escape(atob(payload))));
+  } catch { return {}; }
 }
-/* =========================================================
-   TASKS — FETCH & STORE
-========================================================= */
-async function loadTasks() {
-  const res = await fetch(`${API}/tasks`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+const claims = decodeJwt(idToken || accessToken);
+const currentUserId = claims.sub || "";
+const currentUsername = claims["cognito:username"] || claims.username || claims.email || "User";
+const groupsClaim = claims["cognito:groups"] || [];
+const groups = Array.isArray(groupsClaim) ? groupsClaim : (() => { try { return JSON.parse(groupsClaim); } catch { return [groupsClaim]; } })();
+const isAdmin = groups.includes("admin");
 
-  ALL_TASKS = await res.json();
-
-  /* Normalize identifiers once */
-  ALL_TASKS.forEach(t => {
-    t.id = t.taskId;
-    t.pk = `TASK#${t.taskId}`;
-  });
-
-  ALL_TASKS.sort((a, b) =>
-    new Date(b.updatedAt || b.createdAt) -
-    new Date(a.updatedAt || a.createdAt)
-  );
-
-  renderTasks(ALL_TASKS);
-  refreshMentionsBadge();
+const state = { tasks: [], mentions: [], audit: [], users: [], view: "overview", mode: "table", activeTask: null, mentionQuery: "" };
+const $ = (id) => document.getElementById(id);
+const esc = (value="") => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const date = value => { if (!value) return "—"; const d = new Date(value); return Number.isNaN(d.getTime()) ? "—" : new Intl.DateTimeFormat(undefined,{month:"short",day:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}).format(d); };
+const statusLabel = s => ({todo:"To do","in-progress":"In progress",done:"Done"}[s] || s || "Unknown");
+const statusPill = s => `<span class="pill status-${esc(s)}"><i class="dot dot-${s==="done"?"green":s==="in-progress"?"amber":"blue"}"></i>${esc(statusLabel(s))}</span>`;
+const priorityPill = p => `<span class="pill priority-${esc(p)}">${esc((p||"medium").toUpperCase())}</span>`;
+const categoryPill = c => `<span class="pill category">${esc(c||"general")}</span>`;
+function toast(message, error=false) { const el=document.createElement("div"); el.className="toast"+(error?" error":""); el.textContent=message; $("toastRegion").append(el); setTimeout(()=>el.remove(),3800); }
+async function api(path, options={}) {
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { Authorization:`Bearer ${accessToken}`, ...(options.body?{"Content-Type":"application/json"}:{}), ...(options.headers||{}) } });
+  const raw = await response.text(); let data; try { data=raw?JSON.parse(raw):{}; } catch { data=raw; }
+  if (response.status===401) { toast("Your session has expired. Please sign in again.",true); setTimeout(()=>handleLogout(),900); throw new Error("Unauthorized"); }
+  if (!response.ok) { const msg = data?.message || data?.error || `Request failed (${response.status})`; throw new Error(msg); }
+  return data;
 }
-/* =========================================================
-   SHARED USERS HELPER
-========================================================= */
-function sharedUsersBadge(task) {
-  if (!Array.isArray(task.participants)) return "";
-
-  const shared = task.participants.filter(
-    p => p.userId !== task.ownerId
-  );
-
-  if (!shared.length) return "";
-
-  const names = shared.map(p => p.userName);
-  const visible = names.slice(0, 2).join(", ");
-  const extra = names.length > 2 ? ` (+${names.length - 2})` : "";
-
-  return `
-    <div style="margin-top:6px;font-size:12px;color:#94a3b8;">
-      Shared with: ${visible}${extra}
-    </div>
-  `;
-}
-/* =========================================================
-   TASK RENDER (SINGLE SOURCE OF UI)
-========================================================= */
-function renderTasks(tasks) {
-  const body = document.getElementById("taskBody");
-  body.innerHTML = "";
-
-  tasks.forEach((t, i) => {
-    const canDelete = isAdmin || t.ownerId === claims.sub;
-
-    body.innerHTML += `
-<tr style="${isMyTask(t) ? 'background:#020617;border-left:4px solid #2563eb;' : ''}">
-  <td>${i + 1}</td>
-
-  <td>
-  <div style="font-weight:600;">
-  ${sanitizeInput(t.title)}
-</div>
-
-  <div style="margin-top:6px;">
-    ${categoryBadge(t.category)}
-  </div>
-
-  ${sharedUsersBadge(t)}
-</td>
-
-  <td>
-  ${t.createdBy || t.ownerName}
-  ${t.ownerId === claims.sub ? '<span style="opacity:.6">(You)</span>' : ''}
-</td>
-
-  <!-- STATUS -->
-  <td>
-    ${statusBadge(t.status)}
-    <div style="margin-top:6px;">
-      <select onchange="updateTask('${t.id}','${t.pk}',{ status:this.value })">
-        <option value="todo" ${t.status === "todo" ? "selected" : ""}>todo</option>
-        <option value="in-progress" ${t.status === "in-progress" ? "selected" : ""}>in-progress</option>
-        <option value="done" ${t.status === "done" ? "selected" : ""}>done</option>
-      </select>
-    </div>
-  </td>
-
-  <!-- PRIORITY -->
-  <td>
-    ${priorityBadge(t.priority)}
-    <div style="margin-top:6px;">
-      <select onchange="updateTask('${t.id}','${t.pk}',{ priority:this.value })">
-        <option value="low" ${t.priority === "low" ? "selected" : ""}>low</option>
-        <option value="medium" ${t.priority === "medium" ? "selected" : ""}>medium</option>
-        <option value="high" ${t.priority === "high" ? "selected" : ""}>high</option>
-      </select>
-    </div>
-  </td>
-
-  <td>${formatLocalTime(t.updatedAt || t.createdAt)}</td>
-
-  <!-- ACTIONS -->
-  <td>
-    <button class="btn btn-blue" onclick="loadComments('${t.id}')">
-     Comments <span style="opacity:.7">
-  (${t.commentCount || 0})
-</span>
-    </button>
-    ${
-      canDelete
-        ? `<button class="btn btn-red" onclick="deleteTask('${t.id}','${t.pk}')">Delete</button>`
-        : `<button class="btn btn-red" disabled style="opacity:0.4;cursor:not-allowed;">Delete</button>`
-    }
-  </td>
-</tr>
-
-<tr id="c-${t.id}" class="comment-row hidden">
-  <td colspan="7">
-    <div style="display:flex;gap:8px;margin-top:8px;">
-      <input
-  id="ci-${t.id}"
-  placeholder="Write a comment (@username)">
-      <button class="btn btn-green" onclick="addComment('${t.id}')">Send</button>
-    </div>
-    <div id="cl-${t.id}" style="margin-top:12px;"></div>
-  </td>
-</tr>`;
-    
-  });
-}
-
-/* =========================================================
-   TASK ACTIONS
-========================================================= */
-async function updateTask(id, pk, body) {
-  body.pk = pk;
-
-  await fetch(`${API}/tasks/${id}`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-
-  loadTasks();
-}
-
-async function addTask() {
-  const rawTitle = title.value.trim();
-
-  // ❌ Empty
-  if (!rawTitle) {
-    alert("Title cannot be empty");
+function handleLogout(){
+  if (typeof window.cognitoLogout === "function") {
+    window.cognitoLogout();
     return;
   }
-
-  // ❌ HTML / script attempt
-  if (/[<>]/.test(rawTitle)) {
-    alert("Title cannot contain HTML or special characters");
-    return;
-  }
-
-  await fetch(`${API}/tasks`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      title: rawTitle,
-      description: description.value,
-      category: category.value,
-      status: status.value,
-      priority: priority.value
-    })
-  });
-
-  title.value = "";
-  description.value = "";
-  category.value = "";
-  loadTasks();
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("id_token");
+  localStorage.removeItem("refresh_token");
+  sessionStorage.clear();
+  window.location.replace("login.html");
 }
-
-async function deleteTask(id, pk) {
-  await fetch(`${API}/tasks/${id}`, {
-    method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ pk })
-  });
-
-  loadTasks();
+function setView(view) {
+  state.view=view;
+  document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id===`view-${view}`));
+  document.querySelectorAll(".nav-link").forEach(b=>b.classList.toggle("active",b.dataset.view===view));
+  $("crumbCurrent").textContent=view.toUpperCase();
+  if(view==="overview") renderOverview();
+  if(view==="tasks") renderTasks();
+  if(view==="mentions") loadMentions();
+  if(view==="audit") loadAudit();
+  $("sidebar").classList.remove("open");
 }
-
-/* =========================================================
-   COMMENTS (OPEN / CLOSE + COUNT)
-========================================================= */
-async function loadComments(taskId) {
-  const row = document.getElementById(`c-${taskId}`);
-  if (!row) return;
-
-  if (!row.classList.contains("hidden")) {
-    row.classList.remove("open");
-    setTimeout(() => row.classList.add("hidden"), 200);
-    return;
-  }
-
-  row.classList.remove("hidden");
-  setTimeout(() => row.classList.add("open"), 10);
-
-  const res = await fetch(`${API}/tasks/${taskId}/comments`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-
-  let data = await res.json();
-
-/// ✅ Newest → Oldest (latest on top)
-data.sort((a, b) =>
-  new Date(b.createdAt) - new Date(a.createdAt)
-);
-
- 
-  document.getElementById(`cl-${taskId}`).innerHTML =
-  data.map(c => {
-    const canModify =
-      isAdmin || c.userId === claims.sub;
-
-    return `
-<div style="margin-top:8px;padding:10px;border-radius:8px;
-            background:#020617;border:1px solid #1e293b;">
-
-  <div style="display:flex;justify-content:space-between;">
-    <div style="font-size:13px;color:#60a5fa;font-weight:600;">
-      ${c.userName}
-    </div>
-
-    ${
-      canModify
-        ? `
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-blue"
-                  onclick="startEditComment('${taskId}','${c.commentId}')">
-            Edit
-          </button>
-          <button class="btn btn-red"
-                  onclick="deleteComment('${taskId}','${c.commentId}')">
-            Delete
-          </button>
-        </div>`
-        : ""
-    }
-  </div>
-
- <div id="ct-${c.commentId}" style="margin-top:6px;">
-  ${highlightMentions(c.comment)}
-</div>
-
-  <div style="margin-top:6px;font-size:11px;color:#94a3b8;">
-    ${formatLocalTime(c.createdAt)}
-  </div>
-</div>`;
-  }).join("");
+function visibleTasks(){ return state.tasks; }
+function filteredTasks(){
+  const q=($("taskSearch")?.value||"").trim().toLowerCase(), cat=$("filterCategory")?.value||"", st=$("filterStatus")?.value||"", pr=$("filterPriority")?.value||"";
+  return state.tasks.filter(t=>(!q||`${t.title||""} ${t.description||""} ${t.ownerName||""}`.toLowerCase().includes(q))&&(!cat||t.category===cat)&&(!st||t.status===st)&&(!pr||t.priority===pr));
 }
-
-async function addComment(taskId) {
-  const input = document.getElementById(`ci-${taskId}`);
-  const v = input.value.trim();
-  if (!v) return;
-
-  const btn = input.nextElementSibling;
-  btn.disabled = true;
-
-  await fetch(`${API}/tasks/${taskId}/comments`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ comment: v })
-  });
-
-  input.value = "";
-  btn.disabled = false;
-
-  // ✅ reload comments only
-  await loadComments(taskId);
-
-  // ✅ update count safely
-  const task = ALL_TASKS.find(t => t.id === taskId);
-  if (task) task.commentCount = (task.commentCount || 0) + 1;
-
-  // update button text only
-  const btnLabel = document.querySelector(
-    `button[onclick="loadComments('${taskId}')"]`
-  );
-  if (btnLabel) btnLabel.innerText = `Comments (${task.commentCount})`;
+async function loadTasks(){
+  try {
+    const result=await api("/tasks");
+    state.tasks=Array.isArray(result)?result:[];
+    state.tasks.sort((a,b)=>new Date(b.updatedAt||b.createdAt||0)-new Date(a.updatedAt||a.createdAt||0));
+    $("navTaskCount").textContent=state.tasks.length;
+    renderOverview(); if(state.view==="tasks")renderTasks();
+    return state.tasks;
+  } catch(e){ toast(`Could not load tasks: ${e.message}`,true); throw e; }
 }
-
-
-function startEditComment(taskId, commentId) {
-  const container = document.getElementById(`ct-${commentId}`);
-  const current = container.innerText;
-
-  container.innerHTML = `
-    <textarea id="edit-${commentId}"
-      style="width:100%;background:#020617;
-             border:1px solid #1e293b;color:#e5e7eb;
-             border-radius:8px;padding:6px;">${current}</textarea>
-
-    <div style="margin-top:6px;display:flex;gap:8px;">
-      <button class="btn btn-green"
-        onclick="saveCommentEdit('${taskId}','${commentId}')">
-        Save
-      </button>
-      <button class="btn btn-red"
-        onclick="loadComments('${taskId}')">
-        Cancel
-      </button>
-    </div>
-  `;
+function renderOverview(){
+  const tasks=visibleTasks(), total=tasks.length, todo=tasks.filter(t=>t.status==="todo").length, progress=tasks.filter(t=>t.status==="in-progress").length, done=tasks.filter(t=>t.status==="done").length, high=tasks.filter(t=>t.priority==="high").length;
+  $("statTotal").textContent=total; $("statProgress").textContent=progress; $("statDone").textContent=done; $("statHigh").textContent=high;
+  const rate=total?Math.round(done/total*100):0; $("completionRate").textContent=`${rate}%`; $("completionBar").style.width=`${rate}%`;
+  $("priorityTotal").textContent=total;
+  const max=Math.max(1,todo,progress,done);
+  $("statusChart").innerHTML=[["TO DO",todo,"todo"],["IN PROGRESS",progress,"progress"],["DONE",done,"done"]].map(([label,n,cls])=>`<div class="chart-col"><div class="bar-stack"><i class="${cls}" style="height:${n/max*100}%"></i></div><small>${label}<br>${n}</small></div>`).join("");
+  const low=tasks.filter(t=>t.priority==="low").length, med=tasks.filter(t=>t.priority==="medium").length;
+  const hiPct=total?high/total*100:0, medPct=total?med/total*100:0;
+  $("priorityRing").style.background=`conic-gradient(var(--red) 0 ${hiPct}%,var(--amber) ${hiPct}% ${hiPct+medPct}%,var(--green) ${hiPct+medPct}% 100%)`;
+  $("priorityLegend").innerHTML=`<div>HIGH<b>${high}</b></div><div>MEDIUM<b>${med}</b></div><div>LOW<b>${low}</b></div>`;
+  $("recentTasks").innerHTML=tasks.slice(0,5).map(t=>`<tr><td><div class="task-name">${esc(t.title)}</div><div class="task-desc">${esc(t.description||"No description")}</div></td><td>${statusPill(t.status)}</td><td>${priorityPill(t.priority)}</td><td>${date(t.updatedAt||t.createdAt)}</td><td><button class="mini-btn" data-detail="${esc(t.taskId||t.id)}">Open ↗</button></td></tr>`).join("")||`<tr><td colspan="5" class="empty-state">No tasks yet. Create your first task.</td></tr>`;
 }
-async function saveCommentEdit(taskId, commentId) {
-  const v = document.getElementById(`edit-${commentId}`).value.trim();
-  if (!v) return;
-
-  await fetch(`${API}/tasks/${taskId}/comments/${commentId}`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ comment: v })
-  });
-
-  loadComments(taskId); // refresh
+function taskRow(t){
+ return `<tr><td><div class="task-name">${esc(t.title)}</div><div class="task-desc">${esc(t.description||"No description")}</div></td><td>${categoryPill(t.category)}</td><td>${statusPill(t.status)}</td><td>${priorityPill(t.priority)}</td><td>${esc(t.ownerName||t.createdBy||"—")}${t.ownerId===currentUserId?' <span class="cyan-text">(You)</span>':""}</td><td>${date(t.updatedAt||t.createdAt)}</td><td><div class="row-actions"><button class="mini-btn" data-detail="${esc(t.taskId||t.id)}">Details</button><button class="mini-btn" data-delete-task="${esc(t.taskId||t.id)}">Delete</button></div></td></tr>`;
 }
-async function deleteComment(taskId, commentId) {
-  if (!confirm("Delete this comment?")) return;
-
-  await fetch(`${API}/tasks/${taskId}/comments/${commentId}`, {
-    method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  });
- const task = ALL_TASKS.find(t => t.id === taskId);
-if (task && task.commentCount > 0) task.commentCount--;
-renderTasks(ALL_TASKS);
-  loadComments(taskId);
+function renderTasks(){
+ const tasks=filteredTasks(); $("taskRows").innerHTML=tasks.map(taskRow).join(""); $("taskEmpty").classList.toggle("hidden",tasks.length>0);
+ const columns=[["todo","todoCards","todoCount"],["in-progress","progressCards","progressCount"],["done","doneCards","doneCount"]];
+ for(const [status,container,count] of columns){const list=tasks.filter(t=>t.status===status);$(count).textContent=list.length;$(container).innerHTML=list.map(t=>`<article class="kanban-card" draggable="true" data-drag-task="${esc(t.taskId||t.id)}"><h3>${esc(t.title)}</h3><p>${esc(t.description||"No description")}</p><div class="kanban-card-foot">${priorityPill(t.priority)}<small>${esc(t.ownerName||"")}</small></div><div class="row-actions" style="margin-top:10px"><button class="mini-btn" data-detail="${esc(t.taskId||t.id)}">Details</button></div></article>`).join("")||`<div class="empty-state">No tasks</div>`;}
+ $("taskTableView").classList.toggle("hidden",state.mode!=="table"); $("kanbanView").classList.toggle("hidden",state.mode!=="board");
 }
-
-async function editComment(taskId, commentId, oldText) {
-  const newText = prompt("Edit comment", oldText);
-  if (!newText || newText.trim() === oldText) return;
-
-  const res = await fetch(
-    `${API}/tasks/${taskId}/comments/${commentId}`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        comment: newText.trim()
-      })
-    }
-  );
-
-  if (!res.ok) {
-    const err = await res.text();
-    alert("Edit failed: " + err);
-    return;
-  }
-
-  loadComments(taskId);
+function openTaskModal(){ $("taskForm").reset(); $("taskPriority").value="medium"; $("taskStatus").value="todo"; $("taskModalTitle").textContent="Create task"; $("saveTaskBtn").textContent="Create task ↗"; $("taskModal").classList.remove("hidden"); $("taskTitle").focus(); }
+function closeModal(id){$(id).classList.add("hidden");}
+async function createTask(e){
+ e.preventDefault(); const payload={title:$("taskTitle").value.trim(),description:$("taskDescription").value.trim(),category:$("taskCategory").value,status:$("taskStatus").value,priority:$("taskPriority").value};
+ if(!payload.title)return;
+ const btn=$("saveTaskBtn");btn.disabled=true;btn.textContent="Creating…";
+ try{await api("/tasks",{method:"POST",body:JSON.stringify(payload)});closeModal("taskModal");toast("Task created successfully.");await loadTasks();}
+ catch(err){toast(`Task creation failed: ${err.message}`,true);}
+ finally{btn.disabled=false;btn.textContent="Create task ↗";}
 }
-
-
-/* =========================================================
-   TASK FILTERING (CATEGORY + STATUS + PRIORITY)
-========================================================= */
-function applyFilters() {
-  const status = document.getElementById("filterStatus").value;
-  const priority = document.getElementById("filterPriority").value;
-  const category = document.getElementById("filterCategory")?.value;
-
-  let filtered = [...ALL_TASKS];
-
-  if (category) filtered = filtered.filter(t => t.category === category);
-  if (status) filtered = filtered.filter(t => t.status === status);
-  if (priority) filtered = filtered.filter(t => t.priority === priority);
-
-  renderTasks(filtered);
+function getTask(id){return state.tasks.find(t=>(t.taskId||t.id)===id);}
+async function updateTaskField(id,field,value){
+ const task=getTask(id);if(!task)return;
+ if(!["status","priority"].includes(field)){toast("This field is not editable through the current backend API.",true);return;}
+ try{await api(`/tasks/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify({[field]:value})});toast(`${field==="status"?"Status":"Priority"} updated.`);await loadTasks();}
+ catch(e){toast(`Update failed: ${e.message}`,true);renderTasks();}
 }
-
-function clearFilters() {
-  document.getElementById("filterStatus").value = "";
-  document.getElementById("filterPriority").value = "";
-  if (document.getElementById("filterCategory"))
-    document.getElementById("filterCategory").value = "";
-
-  renderTasks(ALL_TASKS);
+async function deleteTask(id){
+ const task=getTask(id);if(!task)return;
+ if(!confirm(`Delete "${task.title}"? This will soft-delete the task.`))return;
+ try{await api(`/tasks/${encodeURIComponent(id)}`,{method:"DELETE"});toast("Task deleted.");await loadTasks();}
+ catch(e){toast(`Delete failed: ${e.message}`,true);}
 }
-
-/* =========================================================
-   MENTIONS (UNCHANGED)
-========================================================= */
-async function loadMentions() {
-  const res = await fetch(`${API}/mentions`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-
-  const mentions = await res.json();
-  const badge = document.getElementById("mentionsBadge");
-
-  const unread = mentions.filter(m => m.status !== "READ").length;
-  badge.style.display = unread ? "inline-block" : "none";
-  badge.innerText = unread || "";
-
-  const body = document.getElementById("mentionsBody");
-  body.innerHTML = "";
-
-  if (!mentions.length) {
-    body.innerHTML = `<tr><td colspan="5" class="subtitle">No mentions 🎉</td></tr>`;
-    return;
-  }
-
-  mentions.forEach(m => {
-    const date =
-      m.displayDate ||
-      (m.sk?.startsWith("MENTION#")
-        ? new Date(m.sk.split("#")[1]).toLocaleString()
-        : "-");
-
-    body.innerHTML += `
-<tr class="${m.status === "READ" ? "mention-read" : "mention-unread"}">
-  <td><strong>${m.mentionedBy || "Someone"}</strong></td>
-  <td>
-   <div class="mention-task"
-     onclick="openTaskFromMention('${m.taskId}', '${m.sk}')">
-      ${m.taskTitle || "Untitled Task"}
-    </div>
-    <div class="mention-sub">mentioned you</div>
-  </td>
-  <td>${m.comment || ""}</td>
-  <td class="mention-date">${date}</td>
-  <td>
-    ${
-      m.status === "READ"
-        ? "✓ Read"
-        : `<button class="btn btn-blue" onclick="markRead('${m.sk}')">Mark Read</button>`
-    }
-  </td>
-</tr>`;
-  });
+async function openTaskDetails(id){
+ const task=getTask(id);if(!task)return;state.activeTask=task;
+ $("detailTitle").textContent=task.title||"Task details";
+ $("detailContent").innerHTML=`<div class="detail-meta">${statusPill(task.status)} ${priorityPill(task.priority)} ${categoryPill(task.category)}<span class="pill category">OWNER: ${esc(task.ownerName||"—")}</span></div><div class="detail-description">${esc(task.description||"No description provided.")}</div><div class="form-grid"><label>Update status<select id="detailStatus"><option value="todo">To do</option><option value="in-progress">In progress</option><option value="done">Done</option></select></label><label>Update priority<select id="detailPriority"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><div><div class="detail-section-title">CREATED</div><div class="comment-date">${date(task.createdAt)}</div></div></div><div class="modal-actions"><button class="secondary-btn" id="saveTaskMeta">Save status & priority</button></div><div class="detail-section-title">COMMENTS & DISCUSSION</div><div id="commentList">Loading comments…</div><div class="comment-compose"><input id="newComment" maxlength="5000" placeholder="Write a comment… use @username to mention"><button class="primary-btn" id="sendComment">Send ↗</button></div>`;
+ $("detailStatus").value=task.status; $("detailPriority").value=task.priority; $("detailModal").classList.remove("hidden");
+ $("saveTaskMeta").onclick=async()=>{await updateTaskField(id,"status",$("detailStatus").value);await updateTaskField(id,"priority",$("detailPriority").value);state.activeTask=getTask(id);};
+ $("sendComment").onclick=()=>addComment(id);
+ await loadComments(id);
 }
-
-async function markRead(sk) {
-  await fetch(`${API}/mentions/${encodeURIComponent(sk)}`, {
-    method: "PATCH",
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  loadMentions();
+async function loadComments(taskId){
+ const list=$("commentList");if(!list)return;
+ try{const comments=await api(`/tasks/${encodeURIComponent(taskId)}/comments`);comments.sort((a,b)=>new Date(a.createdAt||0)-new Date(b.createdAt||0));
+ list.innerHTML=comments.map(c=>`<div class="comment-item"><div class="comment-top"><strong>${esc(c.userName||"User")}</strong><span class="comment-date">${date(c.createdAt)}</span></div><div class="comment-body">${esc(c.comment||"")}</div><div class="row-actions">${(isAdmin||c.userId===currentUserId)?`<button class="mini-btn" data-edit-comment="${esc(c.commentId)}">Edit</button><button class="mini-btn" data-delete-comment="${esc(c.commentId)}">Delete</button>`:""}</div></div>`).join("")||`<div class="empty-state">No comments yet. Start the conversation.</div>`;
+ }catch(e){list.innerHTML=`<div class="empty-state">Could not load comments: ${esc(e.message)}</div>`;}
 }
-
-function openTaskFromMention(taskId, sk) {
-  // 1️⃣ Mark mention as READ (non-blocking)
-  if (sk) {
-    markRead(sk);
-  }
-
-  // 2️⃣ Switch to tasks view
-  showView("tasks");
-
-  // 3️⃣ Wait for tasks to render
-  setTimeout(() => {
-    const row = document.getElementById(`c-${taskId}`);
-    if (!row) return;
-
-    // Scroll task into view
-    row.scrollIntoView({ behavior: "smooth", block: "center" });
-
-    // Open comments if closed
-    if (row.classList.contains("hidden")) {
-      loadComments(taskId);
-    }
-  }, 600);
+async function addComment(taskId){
+ const input=$("newComment"),comment=input.value.trim();if(!comment)return;
+ try{await api(`/tasks/${encodeURIComponent(taskId)}/comments`,{method:"POST",body:JSON.stringify({comment})});input.value="";toast("Comment added.");await loadComments(taskId);await loadTasks();}
+ catch(e){toast(`Could not add comment: ${e.message}`,true);}
 }
-
-/* =========================================================
-   AUDIT (UNCHANGED)
-========================================================= */
-async function loadAudit() {
-  if (!isAdmin) return;
-
-  const res = await fetch(`${API}/audit`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-
-  const logs = await res.json();
-  logs.sort((a, b) =>
-    new Date(b.updatedAt || b.createdAt) -
-    new Date(a.updatedAt || a.createdAt)
-  );
-
-  const body = document.getElementById("auditBody");
-  body.innerHTML = "";
-
-  logs.forEach((l, i) => {
-    body.innerHTML += `
-<tr>
-  <td>${i + 1}</td>
- <td>
-  ${l.action}
-
-  ${
-    l.oldValue && l.newValue
-      ? `<div style="font-size:12px;color:#94a3b8;margin-top:4px;">
-           ${l.oldValue} → ${l.newValue}
-         </div>`
-      : ""
-  }
-</td>
-  <td>${l.taskTitle || "-"}</td>
-  <td>${l.updatedBy || l.createdBy || l.user || l.deletedBy || "-"}</td>
-  <td>${formatLocalTime(l.updatedAt || l.createdAt)}</td>
-</tr>`;
-  });
+async function editComment(taskId,commentId){
+ const comments=await api(`/tasks/${encodeURIComponent(taskId)}/comments`);const c=comments.find(x=>x.commentId===commentId);if(!c)return;
+ const updated=prompt("Edit your comment:",c.comment||"");if(updated===null||!updated.trim()||updated.trim()===c.comment)return;
+ try{await api(`/tasks/${encodeURIComponent(taskId)}/comments/${encodeURIComponent(commentId)}`,{method:"PUT",body:JSON.stringify({comment:updated.trim()})});toast("Comment updated.");await loadComments(taskId);}
+ catch(e){toast(`Comment edit failed: ${e.message}`,true);}
 }
-
-/* =========================================================
-   MENTIONS BADGE REFRESH
-========================================================= */
-async function refreshMentionsBadge() {
-  const res = await fetch(`${API}/mentions`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-
-  const mentions = await res.json();
-  const unread = mentions.filter(m => m.status !== "READ").length;
-
-  const badge = document.getElementById("mentionsBadge");
-  if (!badge) return;
-
-  badge.style.display = unread ? "inline-block" : "none";
-  badge.innerText = unread || "";
+async function deleteComment(taskId,commentId){
+ if(!confirm("Delete this comment?"))return;
+ try{await api(`/tasks/${encodeURIComponent(taskId)}/comments/${encodeURIComponent(commentId)}`,{method:"DELETE"});toast("Comment deleted.");await loadComments(taskId);await loadTasks();}
+ catch(e){toast(`Comment deletion failed: ${e.message}. Check the deployed DeleteComment Lambda package.`,true);}
 }
-
-function handleTaskMentionInput(e) {
-  // OPTIONAL AUTOCOMPLETE — SAFE NO-OP FOR NOW
-  // Backend already handles mentions from text
-  return;
+async function loadUsers(){try{state.users=await api("/users");}catch(e){console.warn("User directory unavailable",e);state.users=[];}}
+async function loadMentions(){
+ try{state.mentions=await api("/mentions");const unread=state.mentions.filter(m=>m.status!=="READ").length;$("mentionCount").textContent=unread;$("mentionRows").innerHTML=state.mentions.map(m=>`<tr class="${m.status!=="READ"?"mention-unread":""}"><td>${esc(m.mentionedBy||"Teammate")}</td><td><button class="text-btn" data-open-mention="${esc(m.taskId)}">${esc(m.taskTitle||"Task")}</button></td><td>${esc(m.comment||"Mentioned you")}</td><td>${date(m.createdAt)}</td><td>${m.status==="READ"?'<span class="pill status-done">READ</span>':'<span class="pill status-in-progress">UNREAD</span>'}</td><td>${m.status==="READ"?"":`<button class="mini-btn" data-mark-read="${esc(m.sk)}">Mark read</button>`}</td></tr>`).join("");$("mentionEmpty").classList.toggle("hidden",state.mentions.length>0);}
+ catch(e){toast(`Could not load mentions: ${e.message}`,true);}
 }
-/* =========================
-   THEME HANDLING
-========================= */
-function applyTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-  localStorage.setItem("theme", theme);
+async function markMentionRead(sk){
+ try{await api(`/mentions/${encodeURIComponent(sk)}`,{method:"PATCH"});await loadMentions();toast("Mention marked as read.");}
+ catch(e){toast(`Could not update mention: ${e.message}`,true);}
 }
-
-function toggleTheme() {
-  const current = document.documentElement.getAttribute("data-theme") || "dark";
-  applyTheme(current === "dark" ? "light" : "dark");
+async function loadAudit(){
+ if(!isAdmin){toast("Audit trail is available to admins only.",true);setView("overview");return;}
+ try{state.audit=await api("/audit");$("auditTotal").textContent=state.audit.length;$("auditRows").innerHTML=state.audit.map(a=>`<tr><td><span class="pill category">${esc(a.action||"EVENT")}</span></td><td>${esc(a.taskTitle||a.taskId||"—")}</td><td>${esc(a.newValue!==undefined?`${a.oldValue??"—"} → ${a.newValue}`:a.deletedComment||"—")}</td><td>${esc(a.actorName||a.updatedBy||a.deletedBy||a.createdBy||"—")}</td><td>${date(a.updatedAt||a.createdAt||a.deletedAt)}</td></tr>`).join("");$("auditEmpty").classList.toggle("hidden",state.audit.length>0);}
+ catch(e){toast(`Could not load audit trail: ${e.message}`,true);}
 }
-
-/* Init theme */
-const savedTheme = localStorage.getItem("theme") || "dark";
-applyTheme(savedTheme);
-
-function sanitizeInput(text) {
-  return text
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+function setupEvents(){
+ document.querySelectorAll("[data-view]").forEach(b=>b.addEventListener("click",()=>setView(b.dataset.view)));
+ ["topCreateBtn","heroCreateBtn","createTaskBtn"].forEach(id=>$(id).addEventListener("click",openTaskModal));
+ $("taskForm").addEventListener("submit",createTask);
+ document.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",()=>closeModal(b.dataset.close)));
+ ["taskSearch","filterCategory","filterStatus","filterPriority"].forEach(id=>$(id).addEventListener(id==="taskSearch"?"input":"change",renderTasks));
+ $("tableModeBtn").onclick=()=>{state.mode="table";$("tableModeBtn").classList.add("selected");$("boardModeBtn").classList.remove("selected");renderTasks();};
+ $("boardModeBtn").onclick=()=>{state.mode="board";$("boardModeBtn").classList.add("selected");$("tableModeBtn").classList.remove("selected");renderTasks();};
+ $("refreshBtn").onclick=async()=>{await loadTasks();if(state.view==="mentions")await loadMentions();toast("Workspace refreshed.");};
+ $("refreshMentionsBtn").onclick=loadMentions;$("refreshAuditBtn").onclick=loadAudit;
+ $("logoutBtn").onclick=handleLogout;$("mobileMenu").onclick=()=>$("sidebar").classList.toggle("open");
+ document.querySelectorAll("[data-quick-status]").forEach(b=>b.onclick=()=>{setView("tasks");$("filterStatus").value=b.dataset.quickStatus;renderTasks();});
+ document.addEventListener("click",e=>{
+  const d=e.target.closest("[data-detail]");if(d)openTaskDetails(d.dataset.detail);
+  const del=e.target.closest("[data-delete-task]");if(del)deleteTask(del.dataset.deleteTask);
+  const mr=e.target.closest("[data-mark-read]");if(mr)markMentionRead(mr.dataset.markRead);
+  const om=e.target.closest("[data-open-mention]");if(om){setView("tasks");openTaskDetails(om.dataset.openMention);}
+  const ec=e.target.closest("[data-edit-comment]");if(ec&&state.activeTask)editComment(state.activeTask.taskId||state.activeTask.id,ec.dataset.editComment);
+  const dc=e.target.closest("[data-delete-comment]");if(dc&&state.activeTask)deleteComment(state.activeTask.taskId||state.activeTask.id,dc.dataset.deleteComment);
+ });
+ document.querySelectorAll("[data-drop-status]").forEach(col=>{
+  col.addEventListener("dragover",e=>{e.preventDefault();col.closest(".kanban-column").classList.add("drag-over");});
+  col.addEventListener("dragleave",()=>col.closest(".kanban-column").classList.remove("drag-over"));
+  col.addEventListener("drop",e=>{e.preventDefault();col.closest(".kanban-column").classList.remove("drag-over");const id=e.dataTransfer.getData("text/plain");if(id)updateTaskField(id,"status",col.dataset.dropStatus);});
+ });
+ document.addEventListener("dragstart",e=>{const card=e.target.closest("[data-drag-task]");if(card)e.dataTransfer.setData("text/plain",card.dataset.dragTask);});
+ $("taskDescription").addEventListener("input",()=>{
+  const match=$("taskDescription").value.match(/(?:^|\s)@([a-zA-Z0-9_.-]*)$/);const box=$("mentionSuggestions");
+  if(!match){box.classList.add("hidden");return;}
+  const q=match[1].toLowerCase(),matches=state.users.filter(u=>u.username.toLowerCase().includes(q)).slice(0,6);
+  box.innerHTML=matches.map(u=>`<button type="button" data-insert-mention="${esc(u.username)}">@${esc(u.username)}</button>`).join("");box.classList.toggle("hidden",!matches.length);
+ });
+ $("mentionSuggestions").addEventListener("click",e=>{const b=e.target.closest("[data-insert-mention]");if(!b)return;const input=$("taskDescription");input.value=input.value.replace(/(?:^|\s)@[a-zA-Z0-9_.-]*$/,` @${b.dataset.insertMention} `);$("mentionSuggestions").classList.add("hidden");input.focus();});
 }
-
-/* =========================================================
-   LOGOUT
-========================================================= */
-function logout() {
-  localStorage.clear();
-  location.href = "login.html";
+function init(){
+ $("userName").textContent=currentUsername;$("userAvatar").textContent=(currentUsername[0]||"U").toUpperCase();$("userRole").textContent=isAdmin?"ADMINISTRATOR":"MEMBER";
+ if(isAdmin)$("auditNav").classList.remove("hidden");
+ $("todayLabel").textContent=new Intl.DateTimeFormat(undefined,{weekday:"long",month:"short",day:"2-digit"}).format(new Date()).toUpperCase();
+ setupEvents();loadUsers();loadTasks().then(()=>loadMentions()).catch(()=>{});
 }
-
-/* Initial load */
-showView("tasks");
+init();

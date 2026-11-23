@@ -1,455 +1,105 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>FlowTasks</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-
-<style>
-body {
-  margin: 0;
-  font-family: system-ui;
-  background: #0b1020;
-  color: #e5e7eb;
-}
-.app { display: grid; grid-template-columns: 240px 1fr; height: 100vh; }
-
-.sidebar {
-  background: #020617;
-  border-right: 1px solid #1e293b;
-  padding: 20px;
-}
-.brand { font-size: 22px; font-weight: 800; margin-bottom: 30px; }
-
-.nav button {
-  width: 100%;
-  margin-bottom: 10px;
-  padding: 10px;
-  border-radius: 8px;
-  border: none;
-  background: #020617;
-  color: #e5e7eb;
-  cursor: pointer;
-  text-align: left;
-}
-.nav button:hover { background: #1e293b; }
-
-.main { padding: 24px; overflow-y: auto; }
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-}
-.subtitle { color: #94a3b8; font-size: 14px; }
-
-.user-box {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-}
-.user-pill {
-  border: 1px solid #1e293b;
-  padding: 6px 12px;
-  border-radius: 999px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.badge { padding: 4px 10px; border-radius: 999px; font-size: 12px; }
-.admin { background:#7c3aed; }
-.user { background:#334155; }
-
-.logout-btn {
-  font-size: 12px;
-  background: transparent;
-  border: none;
-  color: #94a3b8;
-  cursor: pointer;
-}
-.logout-btn:hover { text-decoration: underline; }
-
-.card {
-  background: #020617;
-  border: 1px solid #1e293b;
-  border-radius: 14px;
-  padding: 20px;
-  margin-bottom: 20px;
-}
-
-.section-title {
-  font-size: 18px;
-  font-weight: 700;
-  margin-bottom: 12px;
-}
-
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: 12px; border-bottom: 1px solid #1e293b; }
-th { color: #94a3b8; font-size: 13px; text-align: left; }
-
-.btn {
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  font-weight: 600;
-}
-.btn-blue { background:#2563eb; color:white; }
-.btn-green { background:#16a34a; color:#020617; }
-.btn-red { background:#991b1b; color:white; }
-
-input,
-select,
-textarea {
-  background-color: #020617 !important;
-  border: 1px solid #1e293b !important;
-  color: #e5e7eb !important;
-  padding: 10px;
-  border-radius: 8px;
-  width: 100%;
-  font-size: 14px;
-  outline: none;
-}
-
-/* Placeholder color */
-input::placeholder,
-textarea::placeholder {
-  color: #94a3b8;
-}
-
-/* Focus state */
-input:focus,
-select:focus,
-textarea:focus {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 1px #2563eb;
-}
-
-.hidden { display:none; }
-
-/* ===== BADGES ===== */
-.status-badge, .priority-badge, .category-badge {
-  padding:4px 10px;
-  border-radius:999px;
-  font-size:12px;
-  font-weight:600;
-  display:inline-block;
-  text-transform:capitalize;
-}
-
-.status-todo { background:#334155; }
-.status-in-progress { background:#ca8a04; color:#020617; }
-.status-done { background:#16a34a; color:#020617; }
-
-.priority-low { background:#15803d; color:#020617; }
-.priority-medium { background:#d97706; color:#020617; }
-.priority-high { background:#b91c1c; }
-
-.category-work { background:#2563eb; }
-.category-personal { background:#334155; }
-.category-bug { background:#7c3aed; }
-.category-feature { background:#16a34a; color:#020617; }
-.category-ops { background:#ca8a04; color:#020617; }
-.category-general { background:#475569; }
-
-/* Comment animation */
-.comment-row {
-  overflow:hidden;
-  max-height:0;
-  opacity:0;
-  transition:max-height .25s ease, opacity .2s ease;
-}
-.comment-row.open {
-  max-height:800px;
-  opacity:1;
-}
-/* =========================
-   @MENTION DROPDOWN
-========================= */
-.mention-box {
-  position: absolute;
-  background: #020617;
-  border: 1px solid #1e293b;
-  border-radius: 10px;
-  margin-top: 6px;
-  z-index: 1000;
-  width: 260px;
-  max-height: 220px;
-  overflow-y: auto;
-  box-shadow: 0 10px 30px rgba(0,0,0,.4);
-}
-
-.mention-item {
-  padding: 8px 12px;
-  cursor: pointer;
-  font-size: 14px;
-  color: #e5e7eb;
-}
-
-.mention-item:hover {
-  background: #1e293b;
-  color: #60a5fa;
-}
-
-/* scrollbar */
-.mention-box::-webkit-scrollbar {
-  width: 6px;
-}
-.mention-box::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 6px;
-  /* =========================
-   THEME VARIABLES
-========================= */
-:root {
-  --bg-main: #0b1020;
-  --bg-card: #020617;
-  --bg-border: #1e293b;
-  --text-main: #e5e7eb;
-  --text-muted: #94a3b8;
-  --accent: #2563eb;
-}
-
-[data-theme="light"] {
-  --bg-main: #f8fafc;
-  --bg-card: #ffffff;
-  --bg-border: #e2e8f0;
-  --text-main: #020617;
-  --text-muted: #475569;
-  --accent: #2563eb;
-}
-
-/* Apply variables */
-body {
-  background: var(--bg-main);
-  color: var(--text-main);
-}
-
-.card, .sidebar {
-  background: var(--bg-card);
-  border-color: var(--bg-border);
-}
-
-.subtitle, th {
-  color: var(--text-muted);
-}
-
-/* =========================
-   HEADER POLISH
-========================= */
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.user-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--bg-border);
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 14px;
-}
-
-.role-pill {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: white;
-}
-
-.logout-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 13px;
-}
-.logout-btn:hover {
-  text-decoration: underline;
-}
-
-/* =========================
-   THEME TOGGLE
-========================= */
-.theme-toggle {
-  cursor: pointer;
-  font-size: 14px;
-  border: 1px solid var(--bg-border);
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: var(--bg-card);
-}
-}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#050a0b">
+  <title>FlowTasks — Operations Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/app.css">
 </head>
-
 <body>
-<div class="app">
-
-  <!-- SIDEBAR -->
-  <div class="sidebar">
-    <div class="brand">FlowTasks</div>
-    <div class="nav">
-      <button onclick="showView('tasks')">Tasks</button>
-      <button onclick="showView('mentions')">
-        Mentions <span id="mentionsBadge"
-        style="display:none;background:#2563eb;color:white;
-        padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;"></span>
-      </button>
-      <button id="auditNav" onclick="showView('audit')" style="display:none;">Audit</button>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="#" data-view="overview"><span class="brand-mark">F</span><span>FLOW<span class="brand-accent">TASKS</span><small>OPERATIONS CONSOLE</small></span></a>
+    <div class="side-label">WORKSPACE</div>
+    <nav class="nav">
+      <button class="nav-link active" data-view="overview"><span>◫</span> Overview</button>
+      <button class="nav-link" data-view="tasks"><span>▦</span> All tasks <b id="navTaskCount">0</b></button>
+      <button class="nav-link" data-dashboard-filter="overdue"><span>!</span> Overdue tasks <b id="navOverdueCount">0</b></button>
+      <button class="nav-link" data-view="mentions"><span>◎</span> Mentions <b id="mentionCount" class="nav-count">0</b></button>
+      <button class="nav-link" data-view="inbox"><span>✉</span> Inbox <b class="nav-count" id="inboxCount">0</b></button>
+      <button class="nav-link admin-only hidden" data-view="audit" id="auditNav"><span>⌁</span> Audit trail</button>
+    </nav>
+    <div class="side-label side-bottom-label">QUICK FILTERS</div>
+    <div class="quick-filters">
+      <button data-quick-status="todo"><i class="dot dot-blue"></i> To do</button>
+      <button data-quick-status="in-progress"><i class="dot dot-amber"></i> In progress</button>
+      <button data-quick-status="done"><i class="dot dot-green"></i> Completed</button>
     </div>
-  </div>
-
-  <!-- MAIN -->
-  <div class="main">
-
-    <!-- HEADER -->
-    <div class="header">
-      <div>
-        <h2 id="greetingText"></h2>
-        <div class="subtitle">Focus. Execute. Deliver.</div>
-      </div>
-      <div class="user-box">
-        <div class="user-pill">
-          <span id="username"></span>
-          <span id="roleBadge" class="badge"></span>
-        </div>
-        <button class="logout-btn" onclick="logout()">Logout</button>
-      </div>
+    <div class="sidebar-foot">
+      <div class="system-status"><span class="pulse"></span><span>API CONNECTION</span><b>READY</b></div>
+      <div class="user-chip"><div class="avatar" id="userAvatar">U</div><div class="user-meta"><strong id="userName">Loading…</strong><small id="userRole">MEMBER</small></div><button id="logoutBtn" class="logout-btn" type="button" title="Sign out and switch account" aria-label="Log out">⇥ <span>Log out</span></button></div>
     </div>
-    
+  </aside>
 
-    <!-- TASKS -->
-    <div id="tasksView">
-      <div class="section-title">Tasks Overview</div>
+  <main class="main">
+    <header class="topbar">
+      <div class="crumb"><span>FLOWTASKS</span><i>›</i><strong id="crumbCurrent">OVERVIEW</strong></div>
+      <div class="top-actions"><span class="live-indicator"><i></i> LIVE WORKSPACE</span><button class="icon-btn" id="refreshBtn" title="Refresh">⟳</button><button class="primary-btn compact" id="topCreateBtn">＋ New task</button><button class="mobile-menu" id="mobileMenu">☰</button></div>
+    </header>
 
-      <!-- CREATE TASK -->
-      <div class="card">
-        <h3>Create Task</h3>
-        <input id="title" placeholder="Title"><br><br>
-       <textarea
-  id="description"
-  rows="3"
-  placeholder="Description (@username supported)">
-</textarea>
-<div id="task-mention-box" style="position:relative;"></div>
-<br>
-        <select id="category">
-          <option value="general">General</option>
-          <option value="work">Work</option>
-          <option value="personal">Personal</option>
-          <option value="bug">Bug</option>
-          <option value="feature">Feature</option>
-          <option value="ops">Ops</option>
-        </select><br><br>
-
-        <select id="status">
-          <option value="todo">To Do</option>
-          <option value="in-progress">In Progress</option>
-          <option value="done">Done</option>
-        </select><br><br>
-
-        <select id="priority">
-          <option value="low">Low</option>
-          <option value="medium" selected>Medium</option>
-          <option value="high">High</option>
-        </select><br><br>
-
-        <button class="btn btn-green" onclick="addTask()">Add Task</button>
+    <section class="view active" id="view-overview">
+      <div class="hero-row"><div><div class="eyebrow">// SYSTEM OVERVIEW <span>•</span> <span id="todayLabel"></span></div><h1>Command <em>center</em></h1><p class="muted">Your work, priorities and team activity at a glance.</p></div><button class="primary-btn" id="heroCreateBtn">＋ Create task</button></div>
+      <div class="stat-grid">
+        <article class="stat-card dashboard-card" role="button" tabindex="0" data-dashboard-filter="all" aria-label="View all tasks"><div class="stat-head">TOTAL TASKS <span class="stat-icon">▦</span></div><div class="stat-value" id="statTotal">—</div><div class="stat-foot">Visible in your workspace · View tasks</div><div class="sparkline cyan"></div></article>
+        <article class="stat-card dashboard-card" role="button" tabindex="0" data-dashboard-filter="todo" aria-label="View to do tasks"><div class="stat-head">TO DO <span class="stat-icon">◷</span></div><div class="stat-value" id="statTodo">—</div><div class="stat-foot">Waiting to be started</div><div class="sparkline cyan"></div></article>
+        <article class="stat-card dashboard-card" role="button" tabindex="0" data-dashboard-filter="in-progress" aria-label="View in progress tasks"><div class="stat-head">IN PROGRESS <span class="stat-icon">↗</span></div><div class="stat-value" id="statProgress">—</div><div class="stat-foot">Currently being worked on</div><div class="sparkline amber"></div></article>
+        <article class="stat-card dashboard-card" role="button" tabindex="0" data-dashboard-filter="done" aria-label="View completed tasks"><div class="stat-head">COMPLETED <span class="stat-icon">✓</span></div><div class="stat-value" id="statDone">—</div><div class="stat-foot"><span id="completionRate">0%</span> completion rate</div><div class="progress-track"><i id="completionBar"></i></div></article>
+        <article class="stat-card dashboard-card" role="button" tabindex="0" data-dashboard-filter="high" aria-label="View high priority tasks"><div class="stat-head">HIGH PRIORITY <span class="stat-icon">⚑</span></div><div class="stat-value warning" id="statHigh">—</div><div class="stat-foot">Tasks requiring attention</div><div class="sparkline red"></div></article>
+        <article class="stat-card dashboard-card" role="button" tabindex="0" data-dashboard-filter="overdue" aria-label="View overdue tasks"><div class="stat-head">OVERDUE <span class="stat-icon">!</span></div><div class="stat-value warning" id="statOverdue">—</div><div class="stat-foot">Past due · Requires a due date</div><div class="sparkline red"></div></article>
       </div>
-
-      <!-- FILTER -->
-      <div class="card">
-        <h3>Filter Tasks</h3>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;">
-          <select id="filterCategory">
-            <option value="">All Category</option>
-            <option value="general">General</option>
-            <option value="work">Work</option>
-            <option value="personal">Personal</option>
-            <option value="bug">Bug</option>
-            <option value="feature">Feature</option>
-            <option value="ops">Ops</option>
-          </select>
-
-          <select id="filterStatus">
-            <option value="">All Status</option>
-            <option value="todo">To Do</option>
-            <option value="in-progress">In Progress</option>
-            <option value="done">Done</option>
-          </select>
-
-          <select id="filterPriority">
-            <option value="">All Priority</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
-
-          <button class="btn btn-blue" onclick="applyFilters()">Apply</button>
-          <button class="btn btn-red" onclick="clearFilters()">Clear</button>
-        </div>
+      <div class="overview-grid">
+        <article class="panel chart-panel"><div class="panel-heading"><div><div class="eyebrow">WORKLOAD</div><h2>Task distribution</h2></div><span class="panel-tag">CURRENT</span></div><div id="statusChart" class="chart-bars"></div><div class="chart-legend"><span><i class="dot dot-blue"></i> To do</span><span><i class="dot dot-amber"></i> In progress</span><span><i class="dot dot-green"></i> Done</span></div></article>
+        <article class="panel priority-panel"><div class="panel-heading"><div><div class="eyebrow">ATTENTION MAP</div><h2>Priority breakdown</h2></div></div><div class="priority-ring-wrap"><div class="priority-ring" id="priorityRing"><div><strong id="priorityTotal">0</strong><small>TASKS</small></div></div></div><div class="priority-legend" id="priorityLegend"></div></article>
       </div>
+      <article class="panel recent-panel"><div class="panel-heading"><div><div class="eyebrow">LATEST CHANGES</div><h2>Recently updated</h2></div><button class="text-btn" data-view="tasks">View all tasks ↗</button></div><div class="table-wrap"><table><thead><tr><th>TASK</th><th>STATUS</th><th>PRIORITY</th><th>UPDATED</th><th></th></tr></thead><tbody id="recentTasks"></tbody></table></div></article>
+    </section>
 
-      <!-- TASK LIST -->
-      <div class="card">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Title</th>
-              <th>Created By</th>
-              <th>Status</th>
-              <th>Priority</th>
-              <th>Updated</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="taskBody"></tbody>
-        </table>
+    <section class="view" id="view-tasks">
+      <div class="page-heading"><div><div class="eyebrow">// WORK MANAGEMENT</div><h1 id="taskPageTitle">Task <em>board</em></h1><p class="muted" id="taskPageDescription">Track work from first action to completion.</p></div><button class="primary-btn" id="createTaskBtn">＋ New task</button></div>
+      <div class="filter-bar panel">
+        <label class="search-box">⌕ <input id="taskSearch" placeholder="Search tasks…"></label>
+        <select id="filterCategory"><option value="">All categories</option><option value="general">General</option><option value="work">Work</option><option value="personal">Personal</option><option value="bug">Bug</option><option value="feature">Feature</option><option value="ops">Operations</option></select>
+        <select id="filterStatus"><option value="">All statuses</option><option value="todo">To do</option><option value="in-progress">In progress</option><option value="done">Done</option></select>
+        <select id="filterPriority"><option value="">All priorities</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+        <div class="view-toggle"><button class="selected" id="tableModeBtn">☷</button><button id="boardModeBtn">▥</button></div>
       </div>
-    </div>
-
-    <!-- MENTIONS -->
-    <div id="mentionsView" class="hidden">
-      <div class="card">
-        <h3>Mentions</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>From</th><th>Task</th><th>Comment</th><th>Date</th><th></th>
-            </tr>
-          </thead>
-          <tbody id="mentionsBody"></tbody>
-        </table>
+      <div id="taskTableView" class="panel task-table-panel"><div class="table-wrap"><table><thead><tr><th>NAME / DESCRIPTION</th><th>CATEGORY</th><th>STATUS</th><th>PRIORITY</th><th>OWNER</th><th>COMMENTS</th><th>UPDATED</th><th>ACTIONS</th></tr></thead><tbody id="taskRows"></tbody></table></div><div class="empty-state hidden" id="taskEmpty">No tasks match these filters.</div></div>
+      <div id="kanbanView" class="kanban-grid hidden">
+        <div class="kanban-column"><div class="kanban-head"><span><i class="dot dot-blue"></i> TO DO</span><b id="todoCount">0</b></div><div class="kanban-list" id="todoCards" data-drop-status="todo"></div></div>
+        <div class="kanban-column"><div class="kanban-head"><span><i class="dot dot-amber"></i> IN PROGRESS</span><b id="progressCount">0</b></div><div class="kanban-list" id="progressCards" data-drop-status="in-progress"></div></div>
+        <div class="kanban-column"><div class="kanban-head"><span><i class="dot dot-green"></i> DONE</span><b id="doneCount">0</b></div><div class="kanban-list" id="doneCards" data-drop-status="done"></div></div>
       </div>
-    </div>
+    </section>
 
-    <!-- AUDIT -->
-    <div id="auditView" class="hidden">
-      <div class="card">
-        <h3>Audit Log</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>#</th><th>Action</th><th>Task</th><th>User</th><th>Date</th>
-            </tr>
-          </thead>
-          <tbody id="auditBody"></tbody>
-        </table>
-      </div>
-    </div>
+    <section class="view" id="view-mentions">
+      <div class="page-heading"><div><div class="eyebrow">// TEAM COLLABORATION</div><h1>Task <em>mentions</em></h1><p class="muted">People who mentioned you in a task or comment.</p></div><button class="secondary-btn" id="refreshMentionsBtn">⟳ Refresh</button></div>
+      <div class="panel"><div class="table-wrap"><table><thead><tr><th>FROM</th><th>TASK</th><th>MESSAGE</th><th>RECEIVED</th><th>STATUS</th><th></th></tr></thead><tbody id="mentionRows"></tbody></table></div><div class="empty-state hidden" id="mentionEmpty">You're all caught up. No mentions yet.</div></div>
+    </section>
 
-  </div>
+    <section class="view" id="view-inbox">
+      <div class="page-heading"><div><div class="eyebrow">// TEAM COMMUNICATION</div><h1>Your <em>inbox</em></h1><p class="muted">Direct and group conversations with your teammates.</p></div></div>
+      <div class="panel inbox-coming-soon"><div class="inbox-icon">✉</div><h2>Team messaging is coming next</h2><p class="muted">Inbox will be a separate communication space for one-to-one and group conversations. Task mentions will remain in Mentions.</p><span class="pill category">MESSAGING — PHASE 5</span></div>
+    </section>
+
+    <section class="view" id="view-audit">
+      <div class="page-heading"><div><div class="eyebrow">// GOVERNANCE & TRACEABILITY</div><h1>Audit <em>trail</em></h1><p class="muted">Chronological record of workspace changes.</p></div><button class="secondary-btn" id="refreshAuditBtn">⟳ Refresh</button></div>
+      <div class="audit-summary"><div class="panel"><small>EVENTS LOADED</small><strong id="auditTotal">0</strong></div><div class="panel"><small>RETENTION WINDOW</small><strong>12 <small>MONTHS*</small></strong></div><div class="panel"><small>ACCESS LEVEL</small><strong class="cyan-text">ADMIN</strong></div></div>
+      <div class="panel"><div class="table-wrap"><table><thead><tr><th>EVENT</th><th>TASK</th><th>CHANGE</th><th>ACTOR</th><th>TIMESTAMP</th></tr></thead><tbody id="auditRows"></tbody></table></div><div class="empty-state hidden" id="auditEmpty">No audit events found in the configured window.</div></div>
+      <p class="footnote">*Retention display reflects the current backend query configuration.</p>
+    </section>
+  </main>
 </div>
 
-<script src="app.js"></script>
+<div class="modal-backdrop hidden" id="taskModal"><section class="modal"><div class="modal-head"><div><div class="eyebrow">// TASK CONFIGURATION</div><h2 id="taskModalTitle">Create task</h2></div><button class="close-btn" data-close="taskModal">×</button></div><form id="taskForm"><label>Task title<input id="taskTitle" maxlength="150" required placeholder="What needs to get done?"></label><label>Description <span class="hint">Use @username to mention teammates</span><textarea id="taskDescription" maxlength="5000" rows="4" placeholder="Add context, acceptance criteria or mention a teammate…"></textarea><div id="mentionSuggestions" class="suggestions hidden"></div></label><div class="form-grid"><label>Category<select id="taskCategory"><option value="general">General</option><option value="work">Work</option><option value="personal">Personal</option><option value="bug">Bug</option><option value="feature">Feature</option><option value="ops">Operations</option></select></label><label>Priority<select id="taskPriority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></label><label>Status<select id="taskStatus"><option value="todo">To do</option><option value="in-progress">In progress</option><option value="done">Done</option></select></label></div><div class="form-note">Mentions in the description are resolved by Cognito and may add the mentioned user as a task participant.</div><div class="modal-actions"><button type="button" class="secondary-btn" data-close="taskModal">Cancel</button><button type="submit" class="primary-btn" id="saveTaskBtn">Create task ↗</button></div></form></section></div>
+
+<div class="modal-backdrop hidden" id="detailModal"><section class="modal modal-wide"><div class="modal-head"><div><div class="eyebrow">// TASK DETAILS</div><h2 id="detailTitle">Task</h2></div><button class="close-btn" data-close="detailModal">×</button></div><div id="detailContent"></div></section></div>
+
+<div class="toast-region" id="toastRegion"></div>
+<script src="auth.js"></script>
+<script src="assets/app.js"></script>
 </body>
 </html>
